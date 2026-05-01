@@ -9,10 +9,10 @@ const PORT = process.env.PORT || 3000;
 //  RACE CONFIGURATION — Edit these for each wager race
 // ═══════════════════════════════════════════════════════════════════
 const RACE_CONFIG = {
-  name: "MARCH MADNESS WAGER RACE",
+  name: "MAY WAGER RACE",
   subtitle: "Wager the most on Damble to climb the leaderboard",
-  startDate: "2026-03-26",
-  endDate: "2026-05-01",
+  startDate: "2026-05-01",
+  endDate: "2026-06-01",
   prizes: [
     { place: "1st", reward: "$375" },
     { place: "2nd", reward: "$260" },
@@ -20,6 +20,34 @@ const RACE_CONFIG = {
   ],
   signupLink: "https://www.damble.io/?dialog=auth&tab=register&referralCode=damble-Gambros",
   brandName: "GAMBROS",
+};
+
+// Damble returns cumulative all-time wager stats for each referral.
+// These reset baselines remove all wager/bet totals already present
+// before the May race window, so the leaderboard only shows growth
+// above this point through 2026-06-01 00:00.
+const RACE_BASELINES = {
+  "alinyogi": { wagered: 12.28, bets: 49 },
+  "allisonbrown": { wagered: 139.12, bets: 219 },
+  "banderasb": { wagered: 47577.17, bets: 9282 },
+  "Barney": { wagered: 245.79, bets: 395 },
+  "C4LD0Y": { wagered: 54046, bets: 28376 },
+  "dabestyeti ": { wagered: 24.09, bets: 57 },
+  "Doyouhavekids": { wagered: 42.31, bets: 290 },
+  "dyluzumaki": { wagered: 334087.43, bets: 15332 },
+  "Eradicate": { wagered: 48.15, bets: 482 },
+  "giuseppo": { wagered: 84.68, bets: 95 },
+  "jackliamwestwood14_c5ner": { wagered: 4043.33, bets: 847 },
+  "JJO420": { wagered: 828.3, bets: 62 },
+  "JordanE23": { wagered: 3511.93, bets: 2353 },
+  "kubul195": { wagered: 43.92, bets: 116 },
+  "Madgam09": { wagered: 29.85, bets: 8 },
+  "samali prate": { wagered: 2258.67, bets: 921 },
+  "sevenjj": { wagered: 5824.5, bets: 284 },
+  "Tasa": { wagered: 110, bets: 737 },
+  "willyjoes": { wagered: 23.14, bets: 66 },
+  "YetiSpins": { wagered: 209632.26, bets: 18465 },
+  "zakwestwood1": { wagered: 13776.93, bets: 6289 },
 };
 
 // ═══════════════════════════════════════════════════════════════════
@@ -94,22 +122,27 @@ app.get("/race-data", async (_req, res) => {
       });
     }
 
-    // Sort by wager descending
-    users.sort((a, b) => (b.totalAmountWagered || 0) - (a.totalAmountWagered || 0));
-
-    // Build clean player objects with only real data
-    const players = users.map((u, i) => ({
-      rank: i + 1,
-      username: u.username || "Unknown",
-      wagered: u.totalAmountWagered || 0,
-      bets: u.totalBetsPlaced || 0,
-      commission: u.totalCommissionEarnedUsd || 0,
-      thisMonth: u.thisMonthEarningsUsd || 0,
-      lastMonth: u.lastMonthEarningsUsd || 0,
-      isActive: u.isActive || false,
-      firstActivity: u.firstCommissionAt || null,
-      lastActivity: u.lastCommissionAt || null,
-    }));
+    // Convert cumulative API totals into May race totals by subtracting
+    // the reset baseline for each existing referral.
+    const players = users
+      .map((u) => {
+        const username = u.username || "Unknown";
+        const baseline = RACE_BASELINES[username] || { wagered: 0, bets: 0 };
+        return {
+          username,
+          wagered: Math.max(0, (u.totalAmountWagered || 0) - baseline.wagered),
+          bets: Math.max(0, (u.totalBetsPlaced || 0) - baseline.bets),
+          commission: u.totalCommissionEarnedUsd || 0,
+          thisMonth: u.thisMonthEarningsUsd || 0,
+          lastMonth: u.lastMonthEarningsUsd || 0,
+          isActive: u.isActive || false,
+          firstActivity: u.firstCommissionAt || null,
+          lastActivity: u.lastCommissionAt || null,
+        };
+      })
+      .filter((p) => p.wagered > 0 || p.bets > 0)
+      .sort((a, b) => b.wagered - a.wagered)
+      .map((p, i) => ({ ...p, rank: i + 1 }));
 
     // Aggregate stats
     const totalWagered = players.reduce((s, p) => s + p.wagered, 0);
