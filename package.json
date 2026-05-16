@@ -1,7 +1,7 @@
 {
-  "name": "gambros-wager-race",
+  "name": "gambros-luxdrop-wager-race",
   "version": "1.0.0",
-  "description": "Gambros Wager Race Leaderboard",
+  "description": "Gambros x LuxDrop Wager Race Leaderboard",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
