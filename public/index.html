@@ -719,7 +719,7 @@
 
     <div class="ladder" id="ladder" hidden>
       <div class="ladder-head">
-        <div class="ladder-now">Current 1st prize <strong id="ladder-current">$100</strong></div>
+        <div class="ladder-now">Current prize pool <strong id="ladder-current">$100</strong></div>
         <div class="ladder-max">
           <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.39 4.84L20 7.6l-4 3.9.94 5.5L12 14.4l-4.94 2.6.94-5.5L4 7.6l5.61-.76L12 2z"/></svg>
           Max <span id="ladder-max">$500</span>
@@ -1255,15 +1255,19 @@
     if (!ladder) return;
     ladder.hidden = false;
 
-    document.getElementById('ladder-current').textContent = '$' + status.currentFirst;
-    document.getElementById('ladder-max').textContent = '$' + status.ladder[status.ladder.length - 1].first;
+    const currentPrizePool = status.currentPrizePool ?? status.currentFirst;
+    const maxPrizePool = status.maxPrizePool ?? (status.ladder[status.ladder.length - 1].prizePool ?? status.ladder[status.ladder.length - 1].first);
+    const nextPrizePool = status.nextPrizePool ?? status.nextFirst;
+
+    document.getElementById('ladder-current').textContent = '$' + currentPrizePool;
+    document.getElementById('ladder-max').textContent = '$' + maxPrizePool;
 
     const stopsEl = document.getElementById('ladder-stops');
     stopsEl.innerHTML = status.ladder.map((s) => {
       const cls = ['stop', s.passed ? 'passed' : '', s.active ? 'active' : ''].filter(Boolean).join(' ');
       return `<div class="${cls}">
         <div class="dot"></div>
-        <div class="amt">$${s.first}</div>
+        <div class="amt">$${s.prizePool ?? s.first}</div>
         <div class="thr">${compactWager(s.threshold)}+</div>
       </div>`;
     }).join('');
@@ -1292,10 +1296,10 @@
     const foot = document.getElementById('ladder-foot');
     if (status.tierIndex >= last) {
       foot.classList.add('maxed');
-      foot.innerHTML = `<strong>MAX TIER UNLOCKED</strong> · 1st place locked at $${status.currentFirst}`;
+      foot.innerHTML = `<strong>MAX TIER UNLOCKED</strong> · Prize pool locked at $${currentPrizePool}`;
     } else {
       foot.classList.remove('maxed');
-      foot.innerHTML = `Wager <strong>${compactWager(status.remainingToNext)}</strong> more to unlock <strong>$${status.nextFirst}</strong>`;
+      foot.innerHTML = `Wager <strong>${compactWager(status.remainingToNext)}</strong> more to unlock <strong>$${nextPrizePool}</strong>`;
     }
   }
 

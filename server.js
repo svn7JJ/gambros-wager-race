@@ -14,16 +14,16 @@ const RACE_CONFIG = {
   subtitle: "Open cases on LuxDrop. Climb the leaderboard. Claim your share.",
   startDate: "2026-05-16",
   endDate: "2026-06-15T23:59:59Z",
-  // 1st place reward scales with the community's total wager.
+  // Total prize pool scales with the community's total wager.
   // The tier with the highest minWager <= totalWagered is the active tier.
   prizeTiers: [
-    { minWager: 0,      first: 100, second: 0,   third: 0   },
-    { minWager: 1000,   first: 200, second: 50,  third: 0   },
-    { minWager: 5000,   first: 300, second: 100, third: 50  },
-    { minWager: 15000,  first: 400, second: 150, third: 75  },
-    { minWager: 30000,  first: 500, second: 200, third: 100 },
+    { minWager: 0,      prizePool: 100, first: 100, second: 0,   third: 0  },
+    { minWager: 1000,   prizePool: 200, first: 150, second: 50,  third: 0  },
+    { minWager: 5000,   prizePool: 300, first: 200, second: 75,  third: 25 },
+    { minWager: 15000,  prizePool: 400, first: 250, second: 100, third: 50 },
+    { minWager: 30000,  prizePool: 500, first: 300, second: 125, third: 75 },
   ],
-  maxFirstPrize: 500,
+  maxPrizePool: 500,
   prizePoolLabel: "$500 MAX PRIZE · GROWS WITH WAGER",
   signupLink: "https://luxdrop.com/r/gambros",
   brandLeft: "GAMBROS",
@@ -179,11 +179,16 @@ function computePrizeStatus(totalWagered) {
     ],
     tierIndex: activeIdx,
     tierCount: tiers.length,
-    currentFirst: active.first,
-    nextFirst: next ? next.first : null,
+    currentPrizePool: active.prizePool,
+    nextPrizePool: next ? next.prizePool : null,
     nextThreshold: next ? next.minWager : null,
     remainingToNext: next ? Math.max(0, next.minWager - totalWagered) : 0,
+    maxPrizePool: tiers[tiers.length - 1].prizePool,
+    // Kept for older cached clients that still read the first-place fields.
+    currentFirst: active.first,
+    nextFirst: next ? next.first : null,
     ladder: tiers.map((t, i) => ({
+      prizePool: t.prizePool,
       first: t.first,
       threshold: t.minWager,
       active: i === activeIdx,
