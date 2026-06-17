@@ -818,8 +818,8 @@
   // ═══════════════════════════════════════════════════════════════════
   //  COUNTDOWN — defaults are overridden by /race-config endDate
   // ═══════════════════════════════════════════════════════════════════
-  const DEFAULT_END = new Date('2026-06-15T23:59:59Z');
-  const START_DATE = new Date('2026-05-16T00:00:00Z');
+  const DEFAULT_END = new Date('2026-07-18T23:59:59Z');
+  const START_DATE = new Date('2026-06-16T00:00:00Z');
 
   function pad(n) { return String(n).padStart(2, '0'); }
   function tickCountdown() {
@@ -1310,7 +1310,7 @@
     const bar = document.getElementById('stats-bar');
     const total = players.reduce((s, p) => s + Number(p.wagered || 0), 0);
     const count = players.length;
-    const end = window.__endDate || new Date('2026-06-15T23:59:59Z');
+    const end = window.__endDate || new Date('2026-07-18T23:59:59Z');
     const daysLeft = Math.max(0, Math.ceil((end - new Date()) / 86400000));
     bar.hidden = false;
     animateCount(document.getElementById('stat-wagered'), total, 1400, fmtCompact);

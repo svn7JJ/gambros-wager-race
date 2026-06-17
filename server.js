@@ -12,8 +12,8 @@ const RACE_CONFIG = {
   name: "GAMBROS × LUXDROP",
   title: "WAGER RACE",
   subtitle: "Open cases on LuxDrop. Climb the leaderboard. Claim your share.",
-  startDate: "2026-05-16",
-  endDate: "2026-06-15T23:59:59Z",
+  startDate: "2026-06-16",
+  endDate: "2026-07-18T23:59:59Z",
   // Total prize pool scales with the community's total wager.
   // The tier with the highest minWager <= totalWagered is the active tier.
   prizeTiers: [
