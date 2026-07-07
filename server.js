@@ -28,7 +28,7 @@ const RACE_CONFIG = {
   signupLink: "https://luxdrop.com/r/gambros",
   brandLeft: "GAMBROS",
   brandRight: "LUXDROP",
-  buildVersion: "weighted-games-2026-07-07",
+  buildVersion: "documented-wager-field-2026-07-07",
 };
 
 // ═══════════════════════════════════════════════════════════════════
