@@ -27,7 +27,7 @@ const RACE_CONFIG = {
   signupLink: "https://luxdrop.com/r/gambros",
   brandLeft: "GAMBROS",
   brandRight: "LUXDROP",
-  buildVersion: "current-month-wager-field-2026-07-07",
+  buildVersion: "current-month-upstream-weighted-wager-2026-07-07",
 };
 
 // ═══════════════════════════════════════════════════════════════════
@@ -132,10 +132,9 @@ async function fetchLuxdrop({ startDate, endDate }) {
   return json;
 }
 
-// The documented LuxDrop external endpoint currently returns a flat affiliate
-// array with one wagered number per user. Use that value directly; if LuxDrop
-// adds game breakdown fields later, this keeps the parser from inventing totals
-// from unrelated numeric columns.
+// LuxDrop confirmed the documented endpoint returns the already-weighted wager
+// total. Use that value directly so blackjack/mines weighting is not applied
+// twice in this app.
 function extractPlayers(raw) {
   const toNumber = (value) => {
     if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -238,7 +237,7 @@ app.get("/race-data", async (_req, res) => {
       source: {
         endpoint: "/external/affiliates",
         wagerField: "wagered",
-        note: "LuxDrop's documented external endpoint currently returns one wagered total per referral and does not include blackjack/mines breakdown fields.",
+        note: "LuxDrop confirmed this wagered value is already weighted upstream, so the leaderboard displays it directly.",
       },
       updatedAt: new Date().toISOString(),
     });
