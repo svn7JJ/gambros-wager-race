@@ -11,9 +11,8 @@ const PORT = process.env.PORT || 3000;
 const RACE_CONFIG = {
   name: "GAMBROS × LUXDROP",
   title: "WAGER RACE",
-  subtitle: "All eligible LuxDrop wagers count. Pick your dates, climb the leaderboard.",
-  startDate: "2026-06-16",
-  endDate: "2026-07-18T23:59:59Z",
+  subtitle: "All eligible LuxDrop wagers count for the current month.",
+  periodLabel: "Current month",
   // Total prize pool scales with the community's total wager.
   // The tier with the highest minWager <= totalWagered is the active tier.
   prizeTiers: [
@@ -28,7 +27,7 @@ const RACE_CONFIG = {
   signupLink: "https://luxdrop.com/r/gambros",
   brandLeft: "GAMBROS",
   brandRight: "LUXDROP",
-  buildVersion: "documented-wager-field-2026-07-07",
+  buildVersion: "current-month-wager-field-2026-07-07",
 };
 
 // ═══════════════════════════════════════════════════════════════════
@@ -57,36 +56,26 @@ function sendSnapshot(res, file) {
   return true;
 }
 
-function hasDateFilter(query = {}) {
-  return query.startDate != null || query.endDate != null;
-}
-
 // ═══════════════════════════════════════════════════════════════════
 //  CACHE — 45 second TTL so the API isn't hammered
 // ═══════════════════════════════════════════════════════════════════
 let apiCache = new Map();
 const CACHE_TTL = 45 * 1000;
 
-function normalizeDate(value) {
-  if (value == null || value === "") return null;
-  const text = String(value).trim();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) {
-    throw { status: 400, body: `Invalid date '${text}'. Use YYYY-MM-DD.` };
-  }
-  const date = new Date(`${text}T00:00:00Z`);
-  if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== text) {
-    throw { status: 400, body: `Invalid date '${text}'. Use YYYY-MM-DD.` };
-  }
-  return text;
+function formatDate(date) {
+  return date.toISOString().slice(0, 10);
 }
 
-function getRaceWindow(query = {}) {
-  const startDate = normalizeDate(query.startDate) || RACE_CONFIG.startDate;
-  const endDate = normalizeDate(query.endDate) || RACE_CONFIG.endDate.slice(0, 10);
-  if (startDate && endDate && startDate > endDate) {
-    throw { status: 400, body: "startDate must be before or equal to endDate." };
-  }
-  return { startDate, endDate };
+function getRaceWindow(now = new Date()) {
+  const year = now.getUTCFullYear();
+  const month = now.getUTCMonth();
+  const start = new Date(Date.UTC(year, month, 1));
+  const end = new Date(Date.UTC(year, month + 1, 0));
+  return {
+    startDate: formatDate(start),
+    endDate: formatDate(end),
+    label: RACE_CONFIG.periodLabel,
+  };
 }
 
 async function fetchLuxdrop({ startDate, endDate }) {
@@ -213,33 +202,21 @@ function computePrizeStatus(totalWagered) {
 
 // ─── Race config endpoint ────────────────────────────────────────
 app.get("/race-config", (_req, res) => {
-  res.json(RACE_CONFIG);
+  res.json({ ...RACE_CONFIG, ...getRaceWindow() });
 });
 
 // ─── Leaderboard data endpoint ───────────────────────────────────
-app.get("/race-data", async (req, res) => {
-  if (USE_SNAPSHOT && !hasDateFilter(req.query) && sendSnapshot(res, SNAPSHOT_DATA_FILE)) return;
+app.get("/race-data", async (_req, res) => {
+  if (!API_KEY && USE_SNAPSHOT && sendSnapshot(res, SNAPSHOT_DATA_FILE)) return;
 
   if (!API_KEY) {
-    if (USE_SNAPSHOT && hasDateFilter(req.query)) {
-      let dateRange = null;
-      try {
-        dateRange = getRaceWindow(req.query);
-      } catch (_) {
-        dateRange = null;
-      }
-      return res.status(503).json({
-        error: "Date filtering needs live LuxDrop API data. This local preview is running from an old snapshot, so it cannot recalculate wager totals for a different date range.",
-        dateRange,
-      });
-    }
     return res.status(500).json({
       error: "API_KEY environment variable not set.",
     });
   }
 
   try {
-    const dateRange = getRaceWindow(req.query);
+    const dateRange = getRaceWindow();
     const raw = await fetchLuxdrop(dateRange);
     const players = extractPlayers(raw)
       .filter((p) => p.wagered > 0)
@@ -272,7 +249,7 @@ app.get("/race-data", async (req, res) => {
     if (err.cloudflare) {
       msg = "Blocked by Cloudflare in front of LuxDrop. The API key is fine — Cloudflare is rejecting the request itself. Ask LuxDrop to allowlist this server's IP/User-Agent in their Cloudflare WAF.";
     } else if (status === 400) {
-      msg = err.body || "Invalid date filter";
+      msg = err.body || "Invalid LuxDrop request";
     } else if (status === 401) {
       msg = "Invalid API key for LuxDrop";
     } else if (status === 403) {
@@ -349,7 +326,7 @@ function startServer() {
       console.log(`   API Key:  ${API_KEY.slice(0, 4)}****`);
       console.log(`   Codes:    ${AFFILIATE_CODES}`);
       console.log(`   Race:     ${RACE_CONFIG.name} ${RACE_CONFIG.title}`);
-      console.log(`   Ends:     ${RACE_CONFIG.endDate}`);
+      console.log(`   Period:   ${RACE_CONFIG.periodLabel}`);
       console.log("");
     }
   });

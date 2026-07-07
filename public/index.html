@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Gambros × LuxDrop · Wager Race</title>
 <meta property="og:title" content="Gambros × LuxDrop Wager Race">
-<meta property="og:description" content="All eligible LuxDrop wagers count. Pick your dates, climb the leaderboard.">
+<meta property="og:description" content="All eligible LuxDrop wagers count for the current month.">
 <meta name="theme-color" content="#a855f7">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -169,63 +169,6 @@
     letter-spacing: -0.5px;
   }
   .cd-lbl { position: relative; font-family: var(--fm); font-size: 10px; font-weight: 600; letter-spacing: 2px; color: var(--t2); margin-top: 4px; text-transform: uppercase; }
-
-  .date-filter {
-    display: inline-flex;
-    align-items: end;
-    justify-content: center;
-    gap: 10px;
-    margin-top: 22px;
-    padding: 10px;
-    border-radius: 16px;
-    background: rgba(255,255,255,0.035);
-    border: 1px solid var(--bdr);
-    backdrop-filter: blur(10px);
-  }
-  .date-field {
-    display: grid;
-    gap: 6px;
-    text-align: left;
-    font-family: var(--fm);
-    color: var(--t2);
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 1.4px;
-    text-transform: uppercase;
-  }
-  .date-field input {
-    width: 148px;
-    min-height: 38px;
-    border: 1px solid rgba(255,255,255,0.12);
-    border-radius: 10px;
-    background: rgba(7,5,13,0.74);
-    color: var(--t1);
-    color-scheme: dark;
-    font-family: var(--fm);
-    font-size: 12px;
-    padding: 0 10px;
-    outline: none;
-  }
-  .date-field input:focus { border-color: rgba(34,211,238,0.45); box-shadow: 0 0 0 3px rgba(34,211,238,0.08); }
-  .filter-btn {
-    min-height: 38px;
-    border: 1px solid rgba(168,85,247,0.34);
-    border-radius: 10px;
-    background: linear-gradient(135deg, var(--p2), var(--p1));
-    color: #fff;
-    font-family: var(--fm);
-    font-size: 11px;
-    font-weight: 800;
-    letter-spacing: 1px;
-    padding: 0 14px;
-    cursor: pointer;
-  }
-  .filter-btn.ghost {
-    background: rgba(255,255,255,0.04);
-    color: var(--t2);
-    border-color: rgba(255,255,255,0.12);
-  }
-  .filter-btn:hover { transform: translateY(-1px); }
 
   /* ════════════════════════ PODIUM ════════════════════════ */
   .podium-wrap {
@@ -708,9 +651,6 @@
   /* ════════════════════════ MOBILE ════════════════════════ */
   @media (max-width: 760px) {
     .shell { padding: 24px 14px 60px; }
-    .date-filter { display: grid; grid-template-columns: 1fr 1fr; width: 100%; max-width: 390px; }
-    .date-field input { width: 100%; }
-    .filter-btn { width: 100%; }
     .podium-wrap { grid-template-columns: 1fr; gap: 22px; }
     .slot-1 { order: -1; }
     .slot-2, .slot-3 { max-width: 360px; margin: 0 auto; }
@@ -753,7 +693,7 @@
     </div>
 
     <h1 class="title"><span class="t-word">WAGER&nbsp;RACE</span></h1>
-    <p class="subtitle" id="subtitle">All eligible LuxDrop wagers count. Pick your dates, climb the leaderboard.</p>
+    <p class="subtitle" id="subtitle">All eligible LuxDrop wagers count for the current month.</p>
 
     <div class="meta-row">
       <span class="pill" id="status-pill"><span class="dot"></span><span id="status-label">LOADING</span></span>
@@ -771,19 +711,6 @@
       <div class="cd-unit"><div class="cd-num" id="cd-m">--</div><div class="cd-lbl">MINS</div></div>
       <div class="cd-unit"><div class="cd-num" id="cd-s">--</div><div class="cd-lbl">SECS</div></div>
     </div>
-
-    <form class="date-filter" id="date-filter">
-      <label class="date-field">
-        <span>From</span>
-        <input type="date" id="date-start" name="startDate">
-      </label>
-      <label class="date-field">
-        <span>To</span>
-        <input type="date" id="date-end" name="endDate">
-      </label>
-      <button class="filter-btn" type="submit">Apply</button>
-      <button class="filter-btn ghost" type="button" id="date-reset">Race Dates</button>
-    </form>
 
     <div class="stats-bar" id="stats-bar" hidden>
       <div class="stat-card"><div class="stat-num" id="stat-wagered">$0</div><div class="stat-lbl">Total Wagered</div></div>
@@ -1393,7 +1320,7 @@
     const bar = document.getElementById('stats-bar');
     const total = players.reduce((s, p) => s + Number(p.wagered || 0), 0);
     const count = players.length;
-    const end = selectedEndDate ? dateEnd(selectedEndDate) : (window.__endDate || DEFAULT_END);
+    const end = window.__endDate || DEFAULT_END;
     const daysLeft = Math.max(0, Math.ceil((end - new Date()) / 86400000));
     bar.hidden = false;
     animateCount(document.getElementById('stat-wagered'), total, 1400, fmtCompact);
@@ -1493,11 +1420,8 @@
   // ═══════════════════════════════════════════════════════════════════
   //  DATA FETCH
   // ═══════════════════════════════════════════════════════════════════
-  const initialParams = new URLSearchParams(window.location.search);
-  let selectedStartDate = initialParams.get('startDate') || '';
-  let selectedEndDate = initialParams.get('endDate') || '';
-  let configStartDate = '2026-06-16';
-  let configEndDate = '2026-07-18';
+  let configStartDate = '';
+  let configEndDate = '';
 
   function dateOnly(value) {
     if (!value) return '';
@@ -1513,58 +1437,19 @@
     return day ? new Date(day + 'T23:59:59Z') : DEFAULT_END;
   }
 
-  function syncDateInputs() {
-    const start = document.getElementById('date-start');
-    const end = document.getElementById('date-end');
-    if (start) start.value = selectedStartDate || configStartDate;
-    if (end) end.value = selectedEndDate || configEndDate;
-  }
-
-  function updateUrlDates() {
+  function clearDateParams() {
     const params = new URLSearchParams(window.location.search);
-    if (selectedStartDate) params.set('startDate', selectedStartDate);
-    else params.delete('startDate');
-    if (selectedEndDate) params.set('endDate', selectedEndDate);
-    else params.delete('endDate');
+    const hadDates = params.has('startDate') || params.has('endDate');
+    if (!hadDates) return;
+    params.delete('startDate');
+    params.delete('endDate');
     const qs = params.toString();
     const next = window.location.pathname + (qs ? '?' + qs : '');
     window.history.replaceState({}, '', next);
   }
 
   function raceDataUrl() {
-    const params = new URLSearchParams();
-    if (selectedStartDate) params.set('startDate', selectedStartDate);
-    if (selectedEndDate) params.set('endDate', selectedEndDate);
-    const qs = params.toString();
-    return '/race-data' + (qs ? '?' + qs : '');
-  }
-
-  function initDateFilter() {
-    const form = document.getElementById('date-filter');
-    const start = document.getElementById('date-start');
-    const end = document.getElementById('date-end');
-    const reset = document.getElementById('date-reset');
-    if (!form || !start || !end) return;
-
-    form.addEventListener('submit', async (event) => {
-      event.preventDefault();
-      selectedStartDate = start.value;
-      selectedEndDate = end.value;
-      updateUrlDates();
-      await loadData();
-    });
-
-    if (reset) {
-      reset.addEventListener('click', async () => {
-        selectedStartDate = configStartDate;
-        selectedEndDate = configEndDate;
-        syncDateInputs();
-        updateUrlDates();
-        await loadData();
-      });
-    }
-
-    syncDateInputs();
+    return '/race-data';
   }
 
   async function loadConfig() {
@@ -1597,9 +1482,6 @@
           window.__endDate = end;
         }
       }
-      if (!initialParams.has('startDate')) selectedStartDate = configStartDate;
-      if (!initialParams.has('endDate')) selectedEndDate = configEndDate;
-      syncDateInputs();
       tickCountdown();
     } catch (_) {}
   }
@@ -1615,9 +1497,22 @@
       const prizesToUse = json.prizes && json.prizes.length ? json.prizes : lastPrizes;
       window.__prizeStatus = json.prizeStatus || null;
       if (json.dateRange) {
-        selectedStartDate = json.dateRange.startDate || selectedStartDate;
-        selectedEndDate = json.dateRange.endDate || selectedEndDate;
-        syncDateInputs();
+        if (json.dateRange.startDate) {
+          configStartDate = dateOnly(json.dateRange.startDate) || configStartDate;
+          const start = new Date(configStartDate + 'T00:00:00Z');
+          if (!isNaN(start)) {
+            DEFAULT_START = start;
+            window.__startDate = start;
+          }
+        }
+        if (json.dateRange.endDate) {
+          configEndDate = dateOnly(json.dateRange.endDate) || configEndDate;
+          const end = dateEnd(configEndDate);
+          if (!isNaN(end)) {
+            DEFAULT_END = end;
+            window.__endDate = end;
+          }
+        }
       }
       renderLeaderboard(json.players || [], prizesToUse);
       if (json.updatedAt) {
@@ -1629,7 +1524,7 @@
   }
 
   (async () => {
-    initDateFilter();
+    clearDateParams();
     await loadConfig();
     await loadData();
     setInterval(loadData, 60 * 1000);
