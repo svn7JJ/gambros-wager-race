@@ -169,6 +169,11 @@ function extractPlayers(raw) {
     "amount", "amountUsd", "usd", "value", "total", "sum", "gross",
     "bet", "bets", "stake", "volume", "turnover",
   ];
+  const RAW_BET_KEYS = [
+    "totalBets", "totalBetAmount", "totalBetsAmount", "totalBetValue",
+    "totalBetsValue", "betsTotal", "betTotal", "betValue", "betsValue",
+    "stakeTotal", "staked",
+  ];
   const GAME_WORDS = [
     "blackjack", "mines", "mine", "case", "cases", "caseopening",
     "slots", "slot", "roulette", "crash", "dice", "plinko", "limbo",
@@ -199,6 +204,7 @@ function extractPlayers(raw) {
   const totalWagerKeySet = new Set(TOTAL_WAGER_KEYS.map(normKey));
   const partWagerKeySet = new Set(PART_WAGER_KEYS.map(normKey));
   const genericAmountKeySet = new Set(GENERIC_AMOUNT_KEYS.map(normKey));
+  const rawBetKeySet = new Set(RAW_BET_KEYS.map(normKey));
   const isBadAmountKey = (key) => (
     /(deposit|withdraw|commission|earn|revenue|profit|balance|bonus|reward|prize|win|won|loss|net|fee|rake)/i.test(key)
   );
@@ -218,6 +224,16 @@ function extractPlayers(raw) {
     return GAME_WORDS.some((word) => normalized.includes(word));
   };
   const isGenericAmountKey = (key) => genericAmountKeySet.has(normKey(key));
+  const isRawBetKey = (key) => rawBetKeySet.has(normKey(key));
+  const gameMultiplier = (key, node, context) => {
+    const marker = ["type", "kind", "game", "gameType", "category", "name", "label"]
+      .map((k) => node && node[k])
+      .filter((v) => typeof v === "string")
+      .join(".");
+    const text = normKey(`${context}.${key}.${marker}`);
+    if (text.includes("blackjack")) return 0.05;
+    return 1;
+  };
   const genericAmountLooksLikeWager = (key, node, context) => {
     if (!isGenericAmountKey(key) || contextHasBadMoney(`${context}.${key}`) || isCountKey(key)) return false;
     const marker = ["type", "kind", "game", "gameType", "category", "name", "label"]
@@ -261,6 +277,10 @@ function extractPlayers(raw) {
         } else if (isTotalWagerKey(key)) {
           game += number;
           if (isCaseContext(`${context}.${key}`)) caseGame += number;
+        } else if (isRawBetKey(key) && contextHasGame(`${context}.${key}`)) {
+          const credited = number * gameMultiplier(key, node, context);
+          game += credited;
+          if (isCaseContext(`${context}.${key}`)) caseGame += credited;
         } else if (isPartWagerKey(key)) {
           if (contextHasGame(`${context}.${key}`) || contextHasGame(key)) {
             game += number;
@@ -269,9 +289,10 @@ function extractPlayers(raw) {
             generic += number;
           }
         } else if (genericAmountLooksLikeWager(key, node, context)) {
-          game += number;
+          const credited = number * gameMultiplier(key, node, context);
+          game += credited;
           if (isCaseContext(`${context}.${key}`) || isCaseContext(node.game || node.gameType || node.type || "")) {
-            caseGame += number;
+            caseGame += credited;
           }
         }
         continue;
