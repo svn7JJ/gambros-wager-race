@@ -358,86 +358,6 @@ function roundMoney(value) {
   return Math.round((Number(value) || 0) * 100) / 100;
 }
 
-function debugLuxdropShape(raw, wantedNames = []) {
-  const wanted = new Set(wantedNames.map((name) => String(name).trim().toLowerCase()).filter(Boolean));
-  const targets = [3105.28, 2918, 1240.23, 1134.57, 724.27, 628.53, 369.68, 245.83, 71.13, 10.79];
-  const toNumber = (value) => {
-    if (typeof value === "number" && Number.isFinite(value)) return value;
-    if (typeof value !== "string") return null;
-    const cleaned = value.replace(/[$,]/g, "").trim();
-    if (cleaned === "" || Number.isNaN(Number(cleaned))) return null;
-    return Number(cleaned);
-  };
-  const findName = (obj) => {
-    for (const key of ["username", "displayName", "playerName", "nickname", "user", "name"]) {
-      const value = obj[key];
-      if (typeof value === "string" && value.trim()) return value.trim();
-      if (value && typeof value === "object" && typeof value.username === "string") return value.username.trim();
-    }
-    return null;
-  };
-
-  const players = [];
-  const targetMatches = [];
-
-  const numericLeaves = (node, path = "") => {
-    const leaves = [];
-    if (!node || typeof node !== "object") return leaves;
-    if (Array.isArray(node)) {
-      node.forEach((item, index) => leaves.push(...numericLeaves(item, `${path}[${index}]`)));
-      return leaves;
-    }
-    for (const [key, value] of Object.entries(node)) {
-      const nextPath = path ? `${path}.${key}` : key;
-      const number = toNumber(value);
-      if (number != null) {
-        leaves.push({ path: nextPath, key, value: number });
-        for (const target of targets) {
-          if (Math.abs(number - target) < 0.02) {
-            targetMatches.push({ path: nextPath, key, value: number, target });
-          }
-        }
-      } else if (value && typeof value === "object") {
-        leaves.push(...numericLeaves(value, nextPath));
-      }
-    }
-    return leaves;
-  };
-
-  const walk = (node, path = "") => {
-    if (!node) return;
-    if (Array.isArray(node)) {
-      node.forEach((item, index) => walk(item, `${path}[${index}]`));
-      return;
-    }
-    if (typeof node !== "object") return;
-
-    const username = findName(node);
-    if (username && (wanted.size === 0 || wanted.has(username.toLowerCase()))) {
-      players.push({
-        path,
-        username,
-        keys: Object.keys(node),
-        numeric: numericLeaves(node, path).slice(0, 120),
-      });
-      return;
-    }
-
-    for (const [key, value] of Object.entries(node)) {
-      if (value && typeof value === "object") walk(value, path ? `${path}.${key}` : key);
-    }
-  };
-
-  walk(raw);
-  numericLeaves(raw);
-  return {
-    rootType: Array.isArray(raw) ? "array" : typeof raw,
-    rootKeys: raw && typeof raw === "object" && !Array.isArray(raw) ? Object.keys(raw) : [],
-    players: players.slice(0, 20),
-    targetMatches: targetMatches.slice(0, 200),
-  };
-}
-
 // Compute the active prize tier and progress toward the next one based on the
 // community's total wager. Returns prizes ready to render plus tier metadata.
 function computePrizeStatus(totalWagered) {
@@ -544,24 +464,6 @@ app.get("/race-data", async (req, res) => {
 });
 
 // ─── Health check ────────────────────────────────────────────────
-app.get("/__debug-luxdrop-shape", async (req, res) => {
-  if (!API_KEY || req.get("x-debug-key") !== API_KEY) {
-    return res.status(404).json({ error: "Not found" });
-  }
-
-  try {
-    const dateRange = getRaceWindow(req.query);
-    const raw = await fetchLuxdrop(dateRange);
-    const names = String(req.query.names || "")
-      .split(",")
-      .map((name) => name.trim())
-      .filter(Boolean);
-    res.json(debugLuxdropShape(raw, names));
-  } catch (err) {
-    res.status(err.status || 500).json({ error: err.body || err.message || "Debug failed" });
-  }
-});
-
 app.get("/healthz", (_req, res) => res.json({ ok: true }));
 
 // ─── Live Reload via SSE (only when files are watchable) ─────────
