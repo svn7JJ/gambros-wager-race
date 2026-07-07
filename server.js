@@ -11,7 +11,7 @@ const PORT = process.env.PORT || 3000;
 const RACE_CONFIG = {
   name: "GAMBROS × LUXDROP",
   title: "WAGER RACE",
-  subtitle: "Open cases on LuxDrop. Climb the leaderboard. Claim your share.",
+  subtitle: "All eligible LuxDrop wagers count. Pick your dates, climb the leaderboard.",
   startDate: "2026-06-16",
   endDate: "2026-07-18T23:59:59Z",
   // Total prize pool scales with the community's total wager.
@@ -36,27 +36,72 @@ const RACE_CONFIG = {
 const API_KEY = process.env.API_KEY || "";
 const AFFILIATE_CODES = process.env.AFFILIATE_CODES || "Gambroslux";
 const LUXDROP_BASE = "https://api.luxdrop.com/external/affiliates";
-const RACE_START_ISO = RACE_CONFIG.startDate;
-const RACE_END_ISO = RACE_CONFIG.endDate.slice(0, 10);
+const SNAPSHOT_DIR = path.join(__dirname, "snapshots");
+const SNAPSHOT_CONFIG_FILE = path.join(SNAPSHOT_DIR, "render-race-config.json");
+const SNAPSHOT_DATA_FILE = path.join(SNAPSHOT_DIR, "render-race-data.json");
+const USE_SNAPSHOT = process.env.USE_SNAPSHOT === "1";
+
+function sendSnapshot(res, file) {
+  if (!fs.existsSync(file)) return false;
+  if (file === SNAPSHOT_DATA_FILE) {
+    const data = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (Array.isArray(data.players)) {
+      data.players = data.players.map(({ deposited, ...player }) => player);
+    }
+    if (data.stats) delete data.stats.totalDeposited;
+    res.json(data);
+    return true;
+  }
+  res.type("application/json").send(fs.readFileSync(file, "utf8"));
+  return true;
+}
+
+function hasDateFilter(query = {}) {
+  return query.startDate != null || query.endDate != null;
+}
 
 // ═══════════════════════════════════════════════════════════════════
 //  CACHE — 45 second TTL so the API isn't hammered
 // ═══════════════════════════════════════════════════════════════════
-let apiCache = { time: 0, data: null };
+let apiCache = new Map();
 const CACHE_TTL = 45 * 1000;
 
-async function fetchLuxdrop() {
-  const now = Date.now();
-  if (apiCache.data && now - apiCache.time < CACHE_TTL) {
-    return apiCache.data;
+function normalizeDate(value) {
+  if (value == null || value === "") return null;
+  const text = String(value).trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    throw { status: 400, body: `Invalid date '${text}'. Use YYYY-MM-DD.` };
   }
+  const date = new Date(`${text}T00:00:00Z`);
+  if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== text) {
+    throw { status: 400, body: `Invalid date '${text}'. Use YYYY-MM-DD.` };
+  }
+  return text;
+}
+
+function getRaceWindow(query = {}) {
+  const startDate = normalizeDate(query.startDate) || RACE_CONFIG.startDate;
+  const endDate = normalizeDate(query.endDate) || RACE_CONFIG.endDate.slice(0, 10);
+  if (startDate && endDate && startDate > endDate) {
+    throw { status: 400, body: "startDate must be before or equal to endDate." };
+  }
+  return { startDate, endDate };
+}
+
+async function fetchLuxdrop({ startDate, endDate }) {
+  const now = Date.now();
 
   const qs = new URLSearchParams({
     codes: AFFILIATE_CODES,
-    startDate: RACE_START_ISO,
-    endDate: RACE_END_ISO,
   });
+  if (startDate) qs.set("startDate", startDate);
+  if (endDate) qs.set("endDate", endDate);
   const url = `${LUXDROP_BASE}?${qs}`;
+  const cached = apiCache.get(url);
+  if (cached && now - cached.time < CACHE_TTL) {
+    return cached.data;
+  }
+
   console.log(`  ->  Fetching: ${url}`);
 
   // Cloudflare sits in front of luxdrop.com and rejects requests with default
@@ -93,41 +138,200 @@ async function fetchLuxdrop() {
   }
 
   const json = await response.json();
-  apiCache = { time: now, data: json };
+  apiCache.set(url, { time: now, data: json });
   return json;
 }
 
 // Walk the JSON tree and pull out anything that looks like a wagering user.
-// We accept several common field-name shapes so this is robust to the exact
-// response format LuxDrop returns.
+// LuxDrop has added non-case games over time, so a user can have wager totals
+// spread across game-specific child objects. Sum those, but prefer explicit
+// total wager fields when they are present to avoid double-counting breakdowns.
 function extractPlayers(raw) {
-  const out = [];
-  const seen = new Set();
+  const players = new Map();
 
-  const NAME_KEYS = ["username", "user", "name", "displayName", "playerName", "nickname"];
-  const WAGER_KEYS = [
-    "wagered", "totalWagered", "amountWagered", "wager", "totalAmountWagered",
-    "wagerAmount", "wagerTotal", "totalWager",
+  const PRIMARY_NAME_KEYS = ["username", "displayName", "playerName", "nickname"];
+  const FALLBACK_NAME_KEYS = ["user", "name"];
+  const USER_ID_KEYS = ["userId", "playerId", "accountId", "id"];
+  const TOTAL_WAGER_KEYS = [
+    "totalWagered", "totalAmountWagered", "totalWager", "wagerTotal",
+    "totalBetAmount", "totalAmountBet", "totalBet", "totalBetted",
+    "totalStaked", "totalStake", "turnover", "volume", "totalVolume",
+    "casinoWagered", "casinoWager", "gameWagered", "gamesWagered",
+    "allWagered", "allGameWagered", "allGamesWagered",
   ];
-  const DEPOSIT_KEYS = [
-    "deposited", "totalDeposited", "deposits", "depositTotal",
-    "totalDeposits", "depositAmount",
+  const PART_WAGER_KEYS = [
+    "wagered", "amountWagered", "wager", "wagerAmount", "betAmount",
+    "amountBet", "stake", "caseWagered", "casesWagered", "caseOpeningWagered",
+    "blackjackWagered", "blackjackWager", "minesWagered", "mineWagered",
+    "minesWager", "mineWager", "gameWager", "gameWagered",
+  ];
+  const GENERIC_AMOUNT_KEYS = [
+    "amount", "amountUsd", "usd", "value", "total", "sum", "gross",
+    "bet", "bets", "stake", "volume", "turnover",
+  ];
+  const GAME_WORDS = [
+    "blackjack", "mines", "mine", "case", "cases", "caseopening",
+    "slots", "slot", "roulette", "crash", "dice", "plinko", "limbo",
+    "keno", "tower", "coinflip", "casino", "game", "games",
   ];
 
-  const pickNum = (obj, keys) => {
-    for (const k of keys) {
-      const v = obj[k];
-      if (typeof v === "number" && isFinite(v)) return v;
-      if (typeof v === "string" && v.trim() !== "" && !isNaN(Number(v))) return Number(v);
-    }
-    return 0;
+  const toNumber = (value) => {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value !== "string") return null;
+    const cleaned = value.replace(/[$,]/g, "").trim();
+    if (cleaned === "" || Number.isNaN(Number(cleaned))) return null;
+    return Number(cleaned);
   };
+
   const pickStr = (obj, keys) => {
-    for (const k of keys) {
-      const v = obj[k];
-      if (typeof v === "string" && v.trim() !== "") return v.trim();
+    for (const key of keys) {
+      const value = obj[key];
+      if (typeof value === "string" && value.trim() !== "") return value.trim();
+      if (value && typeof value === "object" && typeof value.username === "string") {
+        return value.username.trim();
+      }
     }
     return null;
+  };
+
+  const hasAnyKey = (obj, keys) => keys.some((key) => obj[key] != null);
+  const normKey = (key) => String(key).toLowerCase().replace(/[^a-z0-9]/g, "");
+  const totalWagerKeySet = new Set(TOTAL_WAGER_KEYS.map(normKey));
+  const partWagerKeySet = new Set(PART_WAGER_KEYS.map(normKey));
+  const genericAmountKeySet = new Set(GENERIC_AMOUNT_KEYS.map(normKey));
+  const isBadAmountKey = (key) => (
+    /(deposit|withdraw|commission|earn|revenue|profit|balance|bonus|reward|prize|win|won|loss|net|fee|rake)/i.test(key)
+  );
+  const isCountKey = (key) => /(count|number|qty|quantity|placed|rounds|games)$/i.test(key) || /^totalbets$/i.test(key);
+  const isTotalWagerKey = (key) => totalWagerKeySet.has(normKey(key));
+  const isPartWagerKey = (key) => {
+    const normalized = normKey(key);
+    if (partWagerKeySet.has(normalized)) return true;
+    if (isBadAmountKey(key) || isCountKey(normalized)) return false;
+    if (/wager|wagered|stake|turnover|volume/.test(normalized)) return true;
+    return /bet/.test(normalized) && /amount|value|usd|total/.test(normalized);
+  };
+  const contextHasBadMoney = (text) => isBadAmountKey(text) || /(withdraw|deposit|commission|bonus|reward|profit)/i.test(text);
+  const contextHasWager = (text) => /wager|wagered|stake|turnover|volume|bet|bets/.test(normKey(text));
+  const contextHasGame = (text) => {
+    const normalized = normKey(text);
+    return GAME_WORDS.some((word) => normalized.includes(word));
+  };
+  const isGenericAmountKey = (key) => genericAmountKeySet.has(normKey(key));
+  const genericAmountLooksLikeWager = (key, node, context) => {
+    if (!isGenericAmountKey(key) || contextHasBadMoney(`${context}.${key}`) || isCountKey(key)) return false;
+    const marker = ["type", "kind", "game", "gameType", "category", "name", "label"]
+      .map((k) => node[k])
+      .filter((v) => typeof v === "string")
+      .join(".");
+    if (marker && contextHasBadMoney(marker)) return false;
+    if (contextHasWager(`${context}.${key}`) || contextHasGame(`${context}.${key}`)) return true;
+
+    return marker && !contextHasBadMoney(marker) && (contextHasWager(marker) || contextHasGame(marker));
+  };
+  const isCaseContext = (text) => /case|cases|caseopening/.test(normKey(text));
+
+  const collectWagerIn = (node, context = "") => {
+    if (!node || typeof node !== "object") {
+      return { total: 0, generic: 0, game: 0, caseGame: 0, nested: 0 };
+    }
+    if (Array.isArray(node)) {
+      return node.reduce((sum, item) => {
+        const part = collectWagerIn(item, context);
+        sum.total = Math.max(sum.total, part.total);
+        sum.generic += part.generic;
+        sum.game += part.game;
+        sum.caseGame += part.caseGame;
+        sum.nested += part.nested;
+        return sum;
+      }, { total: 0, generic: 0, game: 0, caseGame: 0, nested: 0 });
+    }
+
+    const totals = [];
+    let generic = 0;
+    let game = 0;
+    let caseGame = 0;
+    let nested = 0;
+
+    for (const [key, value] of Object.entries(node)) {
+      const number = toNumber(value);
+      if (number != null && number > 0) {
+        if (isTotalWagerKey(key) && !contextHasGame(context)) {
+          totals.push(number);
+        } else if (isTotalWagerKey(key)) {
+          game += number;
+          if (isCaseContext(`${context}.${key}`)) caseGame += number;
+        } else if (isPartWagerKey(key)) {
+          if (contextHasGame(`${context}.${key}`) || contextHasGame(key)) {
+            game += number;
+            if (isCaseContext(`${context}.${key}`)) caseGame += number;
+          } else {
+            generic += number;
+          }
+        } else if (genericAmountLooksLikeWager(key, node, context)) {
+          game += number;
+          if (isCaseContext(`${context}.${key}`) || isCaseContext(node.game || node.gameType || node.type || "")) {
+            caseGame += number;
+          }
+        }
+        continue;
+      }
+
+      if (value && typeof value === "object") {
+        const part = collectWagerIn(value, `${context}.${key}`);
+        totals.push(part.total);
+        generic += part.generic;
+        game += part.game;
+        caseGame += part.caseGame;
+        nested += part.nested;
+      }
+    }
+
+    return {
+      total: Math.max(0, ...totals),
+      generic,
+      game,
+      caseGame,
+      nested,
+    };
+  };
+
+  const sumWagerIn = (node) => {
+    const collected = collectWagerIn(node);
+    const gameBreakdown = collected.game + collected.nested;
+    let parts = gameBreakdown;
+
+    if (collected.generic > 0) {
+      const genericDuplicatesCase = collected.caseGame > 0 && Math.abs(collected.generic - collected.caseGame) < 0.01;
+      const genericDuplicatesAllGames = gameBreakdown > 0 && Math.abs(collected.generic - gameBreakdown) < 0.01;
+      if (!genericDuplicatesCase && !genericDuplicatesAllGames) {
+        parts += collected.generic;
+      }
+    }
+
+    return Math.max(collected.total, parts, collected.generic);
+  };
+
+  const playerName = (node) => {
+    const hasChildPlayers = Object.entries(node).some(([key, value]) => (
+      Array.isArray(value) && /(users|players|affiliates|codes|results|data)/i.test(key)
+    ));
+    if (hasChildPlayers) return null;
+    const primary = pickStr(node, PRIMARY_NAME_KEYS);
+    if (primary) return primary;
+    if (hasAnyKey(node, USER_ID_KEYS)) return pickStr(node, FALLBACK_NAME_KEYS);
+    return null;
+  };
+
+  const addPlayer = (username, wagered) => {
+    if (!username || wagered <= 0) return;
+    const key = username.toLowerCase();
+    const existing = players.get(key);
+    if (existing) {
+      existing.wagered += wagered;
+      return;
+    }
+    players.set(key, { username, wagered });
   };
 
   const walk = (node) => {
@@ -135,29 +339,23 @@ function extractPlayers(raw) {
     if (Array.isArray(node)) { node.forEach(walk); return; }
     if (typeof node !== "object") return;
 
-    const name = pickStr(node, NAME_KEYS);
-    const wagered = pickNum(node, WAGER_KEYS);
-    const deposited = pickNum(node, DEPOSIT_KEYS);
+    const name = playerName(node);
+    const wagered = sumWagerIn(node);
 
-    if (name && (wagered > 0 || deposited > 0 || node.userId || node.id)) {
-      const key = name.toLowerCase();
-      if (!seen.has(key)) {
-        seen.add(key);
-        out.push({ username: name, wagered, deposited });
-      } else {
-        // Merge by name (sum across rows referencing the same user)
-        const existing = out.find((p) => p.username.toLowerCase() === key);
-        existing.wagered += wagered;
-        existing.deposited += deposited;
-      }
-      return; // don't recurse into a user object
+    if (name && wagered > 0) {
+      addPlayer(name, wagered);
+      return;
     }
 
     Object.values(node).forEach(walk);
   };
 
   walk(raw);
-  return out;
+  return Array.from(players.values());
+}
+
+function roundMoney(value) {
+  return Math.round((Number(value) || 0) * 100) / 100;
 }
 
 // Compute the active prize tier and progress toward the next one based on the
@@ -203,31 +401,45 @@ app.get("/race-config", (_req, res) => {
 });
 
 // ─── Leaderboard data endpoint ───────────────────────────────────
-app.get("/race-data", async (_req, res) => {
+app.get("/race-data", async (req, res) => {
+  if (USE_SNAPSHOT && !hasDateFilter(req.query) && sendSnapshot(res, SNAPSHOT_DATA_FILE)) return;
+
   if (!API_KEY) {
+    if (USE_SNAPSHOT && hasDateFilter(req.query)) {
+      let dateRange = null;
+      try {
+        dateRange = getRaceWindow(req.query);
+      } catch (_) {
+        dateRange = null;
+      }
+      return res.status(503).json({
+        error: "Date filtering needs live LuxDrop API data. This local preview is running from an old snapshot, so it cannot recalculate wager totals for a different date range.",
+        dateRange,
+      });
+    }
     return res.status(500).json({
       error: "API_KEY environment variable not set.",
     });
   }
 
   try {
-    const raw = await fetchLuxdrop();
+    const dateRange = getRaceWindow(req.query);
+    const raw = await fetchLuxdrop(dateRange);
     const players = extractPlayers(raw)
       .filter((p) => p.wagered > 0)
       .sort((a, b) => b.wagered - a.wagered)
-      .map((p, i) => ({ ...p, rank: i + 1 }));
+      .map((p, i) => ({ ...p, wagered: roundMoney(p.wagered), rank: i + 1 }));
 
-    const totalWagered = players.reduce((s, p) => s + p.wagered, 0);
-    const totalDeposited = players.reduce((s, p) => s + p.deposited, 0);
+    const totalWagered = roundMoney(players.reduce((s, p) => s + p.wagered, 0));
     const prizeStatus = computePrizeStatus(totalWagered);
 
     res.json({
       players,
       prizes: prizeStatus.prizes,
       prizeStatus,
+      dateRange,
       stats: {
         totalWagered,
-        totalDeposited,
         playerCount: players.length,
       },
       updatedAt: new Date().toISOString(),
@@ -238,6 +450,8 @@ app.get("/race-data", async (_req, res) => {
     let msg = "Failed to fetch data from LuxDrop API";
     if (err.cloudflare) {
       msg = "Blocked by Cloudflare in front of LuxDrop. The API key is fine — Cloudflare is rejecting the request itself. Ask LuxDrop to allowlist this server's IP/User-Agent in their Cloudflare WAF.";
+    } else if (status === 400) {
+      msg = err.body || "Invalid date filter";
     } else if (status === 401) {
       msg = "Invalid API key for LuxDrop";
     } else if (status === 403) {
@@ -289,23 +503,46 @@ app.use(
 );
 
 // ─── Start ───────────────────────────────────────────────────────
-app.listen(PORT, () => {
-  console.log("");
-  console.log("  ======================================================");
-  console.log("   GAMBROS × LUXDROP WAGER RACE");
-  console.log(`   http://localhost:${PORT}`);
-  console.log("  ======================================================");
-  console.log("");
-  if (!API_KEY) {
-    console.log("  !! API_KEY not set. Set it before running:");
-    console.log("     export API_KEY=...");
-    console.log("     export AFFILIATE_CODES=gambros");
+function startServer() {
+  app.listen(PORT, () => {
     console.log("");
-  } else {
-    console.log(`   API Key:  ${API_KEY.slice(0, 4)}****`);
-    console.log(`   Codes:    ${AFFILIATE_CODES}`);
-    console.log(`   Race:     ${RACE_CONFIG.name} ${RACE_CONFIG.title}`);
-    console.log(`   Ends:     ${RACE_CONFIG.endDate}`);
+    console.log("  ======================================================");
+    console.log("   GAMBROS × LUXDROP WAGER RACE");
+    console.log(`   http://localhost:${PORT}`);
+    console.log("  ======================================================");
     console.log("");
-  }
-});
+    if (USE_SNAPSHOT) {
+      console.log("   Snapshot: serving scraped Render data");
+      if (!API_KEY) {
+        console.log("   API_KEY not set, so live LuxDrop fetching is disabled.");
+        console.log("   Set API_KEY and unset USE_SNAPSHOT to fetch live data.");
+      }
+      console.log("");
+    } else if (!API_KEY) {
+      console.log("  !! API_KEY not set. Set it before running live data:");
+      console.log("     export API_KEY=...");
+      console.log("     export AFFILIATE_CODES=Gambroslux");
+      console.log("     export USE_SNAPSHOT=1  # optional old scraped snapshot preview");
+      console.log("");
+    } else {
+      console.log(`   API Key:  ${API_KEY.slice(0, 4)}****`);
+      console.log(`   Codes:    ${AFFILIATE_CODES}`);
+      console.log(`   Race:     ${RACE_CONFIG.name} ${RACE_CONFIG.title}`);
+      console.log(`   Ends:     ${RACE_CONFIG.endDate}`);
+      console.log("");
+    }
+  });
+}
+
+if (require.main === module) {
+  startServer();
+}
+
+module.exports = {
+  app,
+  computePrizeStatus,
+  extractPlayers,
+  getRaceWindow,
+  roundMoney,
+  startServer,
+};
