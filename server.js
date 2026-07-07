@@ -143,44 +143,11 @@ async function fetchLuxdrop({ startDate, endDate }) {
   return json;
 }
 
-// Walk the JSON tree and pull out anything that looks like a wagering user.
-// LuxDrop has added non-case games over time, so a user can have wager totals
-// spread across game-specific child objects. Sum those, but prefer explicit
-// total wager fields when they are present to avoid double-counting breakdowns.
+// The documented LuxDrop external endpoint currently returns a flat affiliate
+// array with one wagered number per user. Use that value directly; if LuxDrop
+// adds game breakdown fields later, this keeps the parser from inventing totals
+// from unrelated numeric columns.
 function extractPlayers(raw) {
-  const players = new Map();
-
-  const PRIMARY_NAME_KEYS = ["username", "displayName", "playerName", "nickname"];
-  const FALLBACK_NAME_KEYS = ["user", "name"];
-  const USER_ID_KEYS = ["userId", "playerId", "accountId", "id"];
-  const TOTAL_WAGER_KEYS = [
-    "totalWagered", "totalAmountWagered", "totalWager", "wagerTotal",
-    "totalBetAmount", "totalAmountBet", "totalBet", "totalBetted",
-    "totalStaked", "totalStake", "turnover", "volume", "totalVolume",
-    "casinoWagered", "casinoWager", "gameWagered", "gamesWagered",
-    "allWagered", "allGameWagered", "allGamesWagered",
-  ];
-  const PART_WAGER_KEYS = [
-    "wagered", "amountWagered", "wager", "wagerAmount", "betAmount",
-    "amountBet", "stake", "caseWagered", "casesWagered", "caseOpeningWagered",
-    "blackjackWagered", "blackjackWager", "minesWagered", "mineWagered",
-    "minesWager", "mineWager", "gameWager", "gameWagered",
-  ];
-  const GENERIC_AMOUNT_KEYS = [
-    "amount", "amountUsd", "usd", "value", "total", "sum", "gross",
-    "bet", "bets", "stake", "volume", "turnover",
-  ];
-  const RAW_BET_KEYS = [
-    "totalBets", "totalBetAmount", "totalBetsAmount", "totalBetValue",
-    "totalBetsValue", "betsTotal", "betTotal", "betValue", "betsValue",
-    "stakeTotal", "staked",
-  ];
-  const GAME_WORDS = [
-    "blackjack", "mines", "mine", "case", "cases", "caseopening",
-    "slots", "slot", "roulette", "crash", "dice", "plinko", "limbo",
-    "keno", "tower", "coinflip", "casino", "game", "games",
-  ];
-
   const toNumber = (value) => {
     if (typeof value === "number" && Number.isFinite(value)) return value;
     if (typeof value !== "string") return null;
@@ -189,275 +156,22 @@ function extractPlayers(raw) {
     return Number(cleaned);
   };
 
-  const pickStr = (obj, keys) => {
-    for (const key of keys) {
-      const value = obj[key];
-      if (typeof value === "string" && value.trim() !== "") return value.trim();
-      if (value && typeof value === "object" && typeof value.username === "string") {
-        return value.username.trim();
-      }
-    }
-    return null;
-  };
-
-  const hasAnyKey = (obj, keys) => keys.some((key) => obj[key] != null);
-  const normKey = (key) => String(key).toLowerCase().replace(/[^a-z0-9]/g, "");
-  const totalWagerKeySet = new Set(TOTAL_WAGER_KEYS.map(normKey));
-  const partWagerKeySet = new Set(PART_WAGER_KEYS.map(normKey));
-  const genericAmountKeySet = new Set(GENERIC_AMOUNT_KEYS.map(normKey));
-  const rawBetKeySet = new Set(RAW_BET_KEYS.map(normKey));
-  const isBadAmountKey = (key) => (
-    /(deposit|withdraw|commission|earn|revenue|profit|balance|bonus|reward|prize|win|won|loss|net|fee|rake)/i.test(key)
-  );
-  const isCountKey = (key) => /(count|number|qty|quantity|placed|rounds|games)$/i.test(key) || /^totalbets$/i.test(key);
-  const isTotalWagerKey = (key) => totalWagerKeySet.has(normKey(key));
-  const isPartWagerKey = (key) => {
-    const normalized = normKey(key);
-    if (partWagerKeySet.has(normalized)) return true;
-    if (isBadAmountKey(key) || isCountKey(normalized)) return false;
-    if (/wager|wagered|stake|turnover|volume/.test(normalized)) return true;
-    return /bet/.test(normalized) && /amount|value|usd|total/.test(normalized);
-  };
-  const contextHasBadMoney = (text) => isBadAmountKey(text) || /(withdraw|deposit|commission|bonus|reward|profit)/i.test(text);
-  const contextHasWager = (text) => /wager|wagered|stake|turnover|volume|bet|bets/.test(normKey(text));
-  const contextHasGame = (text) => {
-    const normalized = normKey(text);
-    return GAME_WORDS.some((word) => normalized.includes(word));
-  };
-  const isGenericAmountKey = (key) => genericAmountKeySet.has(normKey(key));
-  const isRawBetKey = (key) => rawBetKeySet.has(normKey(key));
-  const gameMultiplier = (key, node, context) => {
-    const marker = ["type", "kind", "game", "gameType", "category", "name", "label"]
-      .map((k) => node && node[k])
-      .filter((v) => typeof v === "string")
-      .join(".");
-    const text = normKey(`${context}.${key}.${marker}`);
-    if (text.includes("blackjack")) return 0.05;
-    return 1;
-  };
-  const genericAmountLooksLikeWager = (key, node, context) => {
-    if (!isGenericAmountKey(key) || contextHasBadMoney(`${context}.${key}`) || isCountKey(key)) return false;
-    const marker = ["type", "kind", "game", "gameType", "category", "name", "label"]
-      .map((k) => node[k])
-      .filter((v) => typeof v === "string")
-      .join(".");
-    if (marker && contextHasBadMoney(marker)) return false;
-    if (contextHasWager(`${context}.${key}`) || contextHasGame(`${context}.${key}`)) return true;
-
-    return marker && !contextHasBadMoney(marker) && (contextHasWager(marker) || contextHasGame(marker));
-  };
-  const isCaseContext = (text) => /case|cases|caseopening/.test(normKey(text));
-
-  const collectWagerIn = (node, context = "") => {
-    if (!node || typeof node !== "object") {
-      return { total: 0, generic: 0, game: 0, caseGame: 0, nested: 0 };
-    }
-    if (Array.isArray(node)) {
-      return node.reduce((sum, item) => {
-        const part = collectWagerIn(item, context);
-        sum.total = Math.max(sum.total, part.total);
-        sum.generic += part.generic;
-        sum.game += part.game;
-        sum.caseGame += part.caseGame;
-        sum.nested += part.nested;
-        return sum;
-      }, { total: 0, generic: 0, game: 0, caseGame: 0, nested: 0 });
-    }
-
-    const totals = [];
-    let generic = 0;
-    let game = 0;
-    let caseGame = 0;
-    let nested = 0;
-
-    for (const [key, value] of Object.entries(node)) {
-      const number = toNumber(value);
-      if (number != null && number > 0) {
-        if (isTotalWagerKey(key) && !contextHasGame(context)) {
-          totals.push(number);
-        } else if (isTotalWagerKey(key)) {
-          game += number;
-          if (isCaseContext(`${context}.${key}`)) caseGame += number;
-        } else if (isRawBetKey(key) && contextHasGame(`${context}.${key}`)) {
-          const credited = number * gameMultiplier(key, node, context);
-          game += credited;
-          if (isCaseContext(`${context}.${key}`)) caseGame += credited;
-        } else if (isPartWagerKey(key)) {
-          if (contextHasGame(`${context}.${key}`) || contextHasGame(key)) {
-            game += number;
-            if (isCaseContext(`${context}.${key}`)) caseGame += number;
-          } else {
-            generic += number;
-          }
-        } else if (genericAmountLooksLikeWager(key, node, context)) {
-          const credited = number * gameMultiplier(key, node, context);
-          game += credited;
-          if (isCaseContext(`${context}.${key}`) || isCaseContext(node.game || node.gameType || node.type || "")) {
-            caseGame += credited;
-          }
-        }
-        continue;
-      }
-
-      if (value && typeof value === "object") {
-        const part = collectWagerIn(value, `${context}.${key}`);
-        totals.push(part.total);
-        generic += part.generic;
-        game += part.game;
-        caseGame += part.caseGame;
-        nested += part.nested;
-      }
-    }
-
-    return {
-      total: Math.max(0, ...totals),
-      generic,
-      game,
-      caseGame,
-      nested,
-    };
-  };
-
-  const sumWagerIn = (node) => {
-    const collected = collectWagerIn(node);
-    const gameBreakdown = collected.game + collected.nested;
-    let parts = gameBreakdown;
-
-    if (collected.generic > 0) {
-      const genericDuplicatesCase = collected.caseGame > 0 && Math.abs(collected.generic - collected.caseGame) < 0.01;
-      const genericDuplicatesAllGames = gameBreakdown > 0 && Math.abs(collected.generic - gameBreakdown) < 0.01;
-      if (!genericDuplicatesCase && !genericDuplicatesAllGames) {
-        parts += collected.generic;
-      }
-    }
-
-    return Math.max(collected.total, parts, collected.generic);
-  };
-
-  const playerName = (node) => {
-    const hasChildPlayers = Object.entries(node).some(([key, value]) => (
-      Array.isArray(value) && /(users|players|affiliates|codes|results|data)/i.test(key)
-    ));
-    if (hasChildPlayers) return null;
-    const primary = pickStr(node, PRIMARY_NAME_KEYS);
-    if (primary) return primary;
-    if (hasAnyKey(node, USER_ID_KEYS)) return pickStr(node, FALLBACK_NAME_KEYS);
-    return null;
-  };
-
-  const addPlayer = (username, wagered) => {
-    if (!username || wagered <= 0) return;
-    const key = username.toLowerCase();
-    const existing = players.get(key);
-    if (existing) {
-      existing.wagered += wagered;
-      return;
-    }
-    players.set(key, { username, wagered });
-  };
-
+  const rows = Array.isArray(raw) ? raw : Array.isArray(raw?.data) ? raw.data : [];
   const walk = (node) => {
-    if (!node) return;
-    if (Array.isArray(node)) { node.forEach(walk); return; }
-    if (typeof node !== "object") return;
-
-    const name = playerName(node);
-    const wagered = sumWagerIn(node);
-
-    if (name && wagered > 0) {
-      addPlayer(name, wagered);
-      return;
+    if (!node || typeof node !== "object") return [];
+    if (Array.isArray(node)) return node.flatMap(walk);
+    if (typeof node.username === "string") {
+      const wagered = toNumber(node.wagered);
+      return wagered > 0 ? [{ username: node.username.trim(), wagered }] : [];
     }
-
-    Object.values(node).forEach(walk);
+    return Object.values(node).flatMap(walk);
   };
 
-  walk(raw);
-  return Array.from(players.values());
+  return rows.length ? walk(rows) : walk(raw);
 }
 
 function roundMoney(value) {
   return Math.round((Number(value) || 0) * 100) / 100;
-}
-
-function debugLuxdropShape(raw, wantedNames = []) {
-  const wanted = new Set(wantedNames.map((name) => String(name).trim().toLowerCase()).filter(Boolean));
-  const targets = [3105.28, 2918, 1240.23, 1134.57, 724.27, 628.53, 369.68, 245.83, 71.13, 10.79];
-  const toNumber = (value) => {
-    if (typeof value === "number" && Number.isFinite(value)) return value;
-    if (typeof value !== "string") return null;
-    const cleaned = value.replace(/[$,]/g, "").trim();
-    if (cleaned === "" || Number.isNaN(Number(cleaned))) return null;
-    return Number(cleaned);
-  };
-  const findName = (obj) => {
-    for (const key of ["username", "displayName", "playerName", "nickname", "user", "name"]) {
-      const value = obj[key];
-      if (typeof value === "string" && value.trim()) return value.trim();
-      if (value && typeof value === "object" && typeof value.username === "string") return value.username.trim();
-    }
-    return null;
-  };
-
-  const players = [];
-  const targetMatches = [];
-
-  const numericLeaves = (node, path = "") => {
-    const leaves = [];
-    if (!node || typeof node !== "object") return leaves;
-    if (Array.isArray(node)) {
-      node.forEach((item, index) => leaves.push(...numericLeaves(item, `${path}[${index}]`)));
-      return leaves;
-    }
-    for (const [key, value] of Object.entries(node)) {
-      const nextPath = path ? `${path}.${key}` : key;
-      const number = toNumber(value);
-      if (number != null) {
-        leaves.push({ path: nextPath, key, value: number });
-        for (const target of targets) {
-          if (Math.abs(number - target) < 0.02) {
-            targetMatches.push({ path: nextPath, key, value: number, target });
-          }
-        }
-      } else if (value && typeof value === "object") {
-        leaves.push(...numericLeaves(value, nextPath));
-      }
-    }
-    return leaves;
-  };
-
-  const walk = (node, path = "") => {
-    if (!node) return;
-    if (Array.isArray(node)) {
-      node.forEach((item, index) => walk(item, `${path}[${index}]`));
-      return;
-    }
-    if (typeof node !== "object") return;
-
-    const username = findName(node);
-    if (username && (wanted.size === 0 || wanted.has(username.toLowerCase()))) {
-      players.push({
-        path,
-        username,
-        keys: Object.keys(node),
-        numeric: numericLeaves(node, path).slice(0, 120),
-      });
-      return;
-    }
-
-    for (const [key, value] of Object.entries(node)) {
-      if (value && typeof value === "object") walk(value, path ? `${path}.${key}` : key);
-    }
-  };
-
-  walk(raw);
-  numericLeaves(raw);
-  return {
-    rootType: Array.isArray(raw) ? "array" : typeof raw,
-    rootKeys: raw && typeof raw === "object" && !Array.isArray(raw) ? Object.keys(raw) : [],
-    players: players.slice(0, 20),
-    targetMatches: targetMatches.slice(0, 200),
-  };
 }
 
 // Compute the active prize tier and progress toward the next one based on the
@@ -544,6 +258,11 @@ app.get("/race-data", async (req, res) => {
         totalWagered,
         playerCount: players.length,
       },
+      source: {
+        endpoint: "/external/affiliates",
+        wagerField: "wagered",
+        note: "LuxDrop's documented external endpoint currently returns one wagered total per referral and does not include blackjack/mines breakdown fields.",
+      },
       updatedAt: new Date().toISOString(),
     });
   } catch (err) {
@@ -566,24 +285,6 @@ app.get("/race-data", async (req, res) => {
 });
 
 // ─── Health check ────────────────────────────────────────────────
-app.get("/__debug-luxdrop-shape", async (req, res) => {
-  if (!API_KEY || req.get("x-debug-key") !== API_KEY) {
-    return res.status(404).json({ error: "Not found" });
-  }
-
-  try {
-    const dateRange = getRaceWindow(req.query);
-    const raw = await fetchLuxdrop(dateRange);
-    const names = String(req.query.names || "")
-      .split(",")
-      .map((name) => name.trim())
-      .filter(Boolean);
-    res.json(debugLuxdropShape(raw, names));
-  } catch (err) {
-    res.status(err.status || 500).json({ error: err.body || err.message || "Debug failed" });
-  }
-});
-
 app.get("/healthz", (_req, res) => res.json({ ok: true }));
 
 // ─── Live Reload via SSE (only when files are watchable) ─────────
