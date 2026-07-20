@@ -11,8 +11,8 @@ const PORT = process.env.PORT || 3000;
 const RACE_CONFIG = {
   name: "GAMBROS × LUXDROP",
   title: "WAGER RACE",
-  subtitle: "All eligible LuxDrop wagers count for the current month.",
-  periodLabel: "Current month",
+  subtitle: "All eligible LuxDrop wagers count from 19 July to 19 August.",
+  periodLabel: "19 July - 19 August",
   // Total prize pool scales with the community's total wager.
   // The tier with the highest minWager <= totalWagered is the active tier.
   prizeTiers: [
@@ -27,7 +27,12 @@ const RACE_CONFIG = {
   signupLink: "https://luxdrop.com/r/gambros",
   brandLeft: "GAMBROS",
   brandRight: "LUXDROP",
-  buildVersion: "current-month-upstream-weighted-wager-2026-07-07",
+  buildVersion: "july-19-august-19-window-2026-07-20",
+};
+
+const RACE_WINDOW = {
+  startDate: "2026-07-19",
+  endDate: "2026-08-19",
 };
 
 // ═══════════════════════════════════════════════════════════════════
@@ -62,18 +67,9 @@ function sendSnapshot(res, file) {
 let apiCache = new Map();
 const CACHE_TTL = 45 * 1000;
 
-function formatDate(date) {
-  return date.toISOString().slice(0, 10);
-}
-
-function getRaceWindow(now = new Date()) {
-  const year = now.getUTCFullYear();
-  const month = now.getUTCMonth();
-  const start = new Date(Date.UTC(year, month, 1));
-  const end = new Date(Date.UTC(year, month + 1, 0));
+function getRaceWindow() {
   return {
-    startDate: formatDate(start),
-    endDate: formatDate(end),
+    ...RACE_WINDOW,
     label: RACE_CONFIG.periodLabel,
   };
 }
